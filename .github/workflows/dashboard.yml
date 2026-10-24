@@ -4,9 +4,18 @@ on:
   schedule:
     - cron: "*/30 * * * *"
   workflow_dispatch:
+    inputs:
+      litter_cleaned:
+        description: "Type yes to mark the litter box cleaned today"
+        required: false
+        default: "no"
 
 permissions:
   contents: write
+
+concurrency:
+  group: dashboard
+  cancel-in-progress: false
 
 jobs:
   build:
@@ -23,6 +32,12 @@ jobs:
           sudo apt-get install -y fonts-dejavu-core
           pip install pillow icalendar recurring-ical-events
 
+      - name: Mark litter box cleaned
+        if: ${{ github.event.inputs.litter_cleaned == 'yes' }}
+        run: |
+          TODAY=$(TZ=America/New_York date +%F)
+          echo "{\"litter_last_cleaned\": \"$TODAY\"}" > state.json
+
       - name: Generate dashboard
         env:
           CALENDAR_URL: ${{ secrets.CALENDAR_URL }}
@@ -33,5 +48,6 @@ jobs:
           git config user.name "dashboard-bot"
           git config user.email "dashboard-bot@users.noreply.github.com"
           git add dash.png
+          if [ -f state.json ]; then git add state.json; fi
           git diff --cached --quiet || git commit -m "Update dashboard"
           git push

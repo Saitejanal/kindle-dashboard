@@ -23,6 +23,8 @@ OUT = "dash.png"
 W, H = 1072, 1448
 MAX_EVENTS = 5
 LOOKAHEAD_DAYS = 90
+LITTER_EVERY_DAYS = 2   # how often the litter box should be cleaned
+STATE_FILE = "state.json"
 # ---------------------------------
 
 UA = {"User-Agent": "kindle-dashboard (github.com/Saitejanal/kindle-dashboard)"}
@@ -236,6 +238,29 @@ def fit(text, fnt, max_w, draw):
     return text.rstrip() + "\u2026"
 
 
+# ---------------- litter state ----------------
+def load_litter(now):
+    """Reads state.json -> dict(days, mood, headline, sub, filled) or None."""
+    if not os.path.exists(STATE_FILE):
+        return None
+    with open(STATE_FILE) as f:
+        last = date.fromisoformat(json.load(f)["litter_last_cleaned"])
+    days = max((now.date() - last).days, 0)
+    every = LITTER_EVERY_DAYS
+    if days == 0:
+        mood, head = "happy", "Cleaned today"
+        sub = "Next in %d days" % every if every > 1 else "Due tomorrow"
+    elif days < every:
+        mood, head = "ok", "1 day ago" if days == 1 else f"{days} days ago"
+        left = every - days
+        sub = "Due tomorrow" if left == 1 else f"Due in {left} days"
+    else:
+        mood, head = "grumpy", f"{days} days ago"
+        sub = "Due today" if days == every else "Overdue!"
+    filled = min(4, round(days / every * 4))
+    return {"days": days, "mood": mood, "headline": head, "sub": sub, "filled": filled}
+
+
 # ---------------- the cat ----------------
 def draw_cat(d, cx, cy, size, mood):
     """Tuxedo cat: black body, white blaze, muzzle, bib, front paws and hip patch.
@@ -389,16 +414,25 @@ def render(ctx):
     d.text((pad+245, top+116), "not connected", font=font(26, True), fill=0)
     d.line([520, top+8, 520, top+278], fill=0, width=3)
 
-    # --- cat / litter placeholder ---
+    # --- cat / litter ---
+    lit = ctx.get("litter")
     d.text((560, top), "CAT", font=font(34, True), fill=0)
-    draw_cat(d, 655, top+136, 170, "ok")
+    draw_cat(d, 655, top+136, 170, lit["mood"] if lit else "ok")
     d.text((775, top+63), "Litter box", font=font(27), fill=40)
-    d.text((775, top+100), "not tracked", font=font(30, True), fill=0)
-    d.text((775, top+150), "yet", font=font(26), fill=40)
+    if lit:
+        d.text((775, top+100), lit["headline"], font=font(30, True), fill=0)
+        d.text((775, top+150), lit["sub"], font=font(26, True if lit["mood"] == "grumpy" else False), fill=0 if lit["mood"] == "grumpy" else 40)
+    else:
+        d.text((775, top+100), "not tracked", font=font(30, True), fill=0)
+        d.text((775, top+150), "yet", font=font(26), fill=40)
+    filled = lit["filled"] if lit else 0
     bx, by, bw, bh, gap = 560, top+256, 98, 26, 12
     for i in range(4):
         x = bx + i*(bw+gap)
-        d.rectangle((x, by, x+bw, by+bh), outline=0, width=3, fill=255)
+        if i < filled:
+            d.rectangle((x, by, x+bw, by+bh), fill=0)
+        else:
+            d.rectangle((x, by, x+bw, by+bh), outline=0, width=3, fill=255)
 
     d.text((W-pad, H-36), f"Updated {now.strftime('%-I:%M %p')}", font=font(26), fill=110, anchor="rs")
     return img
@@ -421,6 +455,7 @@ def main():
         "aqi": safe("Air quality", fetch_air),
         "alerts": safe("Alerts", lambda: fetch_alerts(now), []),
         "events": safe("Calendar", lambda: get_events(now), (None, None)),
+        "litter": safe("Litter", lambda: load_litter(now)),
     }
     render(ctx).save(OUT)
     print("Saved", OUT)

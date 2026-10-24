@@ -17,7 +17,8 @@ LAT, LON = 41.3165, -73.0932        # Shelton, CT
 TZ = "America/New_York"
 OUT = "dash.png"
 W, H = 1072, 1448
-MAX_EVENT_ROWS = 5
+MAX_EVENTS = 5          # how many upcoming events to show
+LOOKAHEAD_DAYS = 30     # how far ahead to look
 # ---------------------------------
 
 WMO = {
@@ -80,7 +81,7 @@ def _to_local(dt, tz):
 
 
 def get_events(now):
-    """Returns (today_rows, tomorrow_rows); each row is (label, title)."""
+    """Returns the next MAX_EVENTS upcoming events as (day, time, title) rows."""
     import icalendar
     import recurring_ical_events
 
@@ -88,12 +89,12 @@ def get_events(now):
     if raw is None:
         return None
     tz = now.tzinfo
+    today = now.date()
     cal = icalendar.Calendar.from_ical(raw)
-    day0 = datetime.combine(now.date(), datetime.min.time(), tzinfo=tz)
-    day2 = day0 + timedelta(days=2)
-    found = recurring_ical_events.of(cal).between(day0, day2)
+    day0 = datetime.combine(today, datetime.min.time(), tzinfo=tz)
+    found = recurring_ical_events.of(cal).between(day0, day0 + timedelta(days=LOOKAHEAD_DAYS))
 
-    today, tomorrow = [], []
+    rows = []
     for ev in found:
         title = str(ev.get("SUMMARY", "(no title)"))
         start = _to_local(ev.get("DTSTART").dt, tz)
@@ -101,31 +102,31 @@ def get_events(now):
         end = _to_local(end_prop.dt, tz) if end_prop else start
 
         if isinstance(start, datetime):
-            sort_key = start
-            label = start.strftime("%-I:%M %p").lower().replace(" ", "")
-            day = start.date()
-            if end <= now and day == now.date():
-                continue  # already finished today
-        else:  # all-day
-            sort_key = datetime.combine(start, datetime.min.time(), tzinfo=tz)
-            label = "All day"
-            day = start
-            # all-day events can span days; DTEND is exclusive
-            last = (end - timedelta(days=1)) if isinstance(end, date) and not isinstance(end, datetime) else start
-            if start <= now.date() <= last:
-                day = now.date()
+            if end <= now:
+                continue  # already finished
+            show_day = start.date()
+            if show_day < today:
+                show_day = today  # started earlier and still running
+            time_label = start.strftime("%-I:%M%p").lower()
+            order = (show_day, 1, start)
+        else:  # all-day (DTEND is exclusive)
+            last = (end - timedelta(days=1)) if (isinstance(end, date) and not isinstance(end, datetime)) else start
+            if last < today:
+                continue
+            show_day = max(start, today)
+            time_label = "All day"
+            order = (show_day, 0, datetime.combine(show_day, datetime.min.time(), tzinfo=tz))
 
-        row = (sort_key, label, title)
-        if day == now.date():
-            today.append(row)
-        elif day == now.date() + timedelta(days=1):
-            tomorrow.append(row)
+        if show_day == today:
+            day_label = "Today"
+        elif show_day == today + timedelta(days=1):
+            day_label = "Tmrw"
+        else:
+            day_label = datetime.combine(show_day, datetime.min.time()).strftime("%a %-m/%-d")
+        rows.append((order, day_label, time_label, title))
 
-    key = lambda r: (r[1] != "All day", r[0])
-    today.sort(key=key)
-    tomorrow.sort(key=key)
-    strip = lambda rows: [(l, t) for _, l, t in rows]
-    return strip(today), strip(tomorrow)
+    rows.sort(key=lambda r: r[0])
+    return [(d, t, title) for _, d, t, title in rows[:MAX_EVENTS]]
 
 
 def fit(text, fnt, max_w, draw):
@@ -176,46 +177,27 @@ def render(data, events, now):
 
     d.line([pad, 810, W - pad, 810], fill=0, width=5)
 
-    # Calendar
-    d.text((pad, 828), "TODAY", font=font(44, True), fill=0)
-    y = 895
-    row_h = 54
-    limit = 1150          # nothing may be drawn below this line
+    # Calendar: next upcoming events
+    d.text((pad, 828), "UPCOMING", font=font(44, True), fill=0)
+    y = 892
+    row_h = 52
     if events is None:
         d.text((pad, y), "Calendar not set up", font=font(38), fill=110)
+    elif not events:
+        d.text((pad, y), "No upcoming events", font=font(38), fill=110)
     else:
-        today, tomorrow = events
-        rows = [(l, t, False) for l, t in today]
-        if not rows:
-            d.text((pad, y), "Nothing more today", font=font(38), fill=110)
+        x_day, x_time, x_title = pad, pad + 170, pad + 340
+        for day_label, time_label, title in events:
+            d.text((x_day, y), day_label, font=font(32, True), fill=0)
+            d.text((x_time, y), time_label, font=font(32), fill=40)
+            d.text((x_title, y), fit(title, font(34), W - pad - x_title, d), font=font(34), fill=0)
             y += row_h
-        if len(rows) < MAX_EVENT_ROWS and tomorrow:
-            rows += [(l, t, True) for l, t in tomorrow]
-        drawn = 0
-        was_tomorrow = False
-        for i, (label, title, is_tmrw) in enumerate(rows):
-            need = row_h + (38 if (is_tmrw and not was_tomorrow) else 0)
-            remaining = len(rows) - i
-            reserve = 0 if remaining == 1 else 34   # room for a "+N more" line
-            if y + need + reserve > limit or drawn >= MAX_EVENT_ROWS:
-                break
-            if is_tmrw and not was_tomorrow:
-                d.text((pad, y), "Tomorrow", font=font(30, True), fill=90)
-                y += 38
-                was_tomorrow = True
-            d.text((pad, y), label, font=font(36, True), fill=0)
-            d.text((pad + 190, y), fit(title, font(36), W - pad - (pad + 190), d), font=font(36), fill=0)
-            y += row_h
-            drawn += 1
-        extra = len(rows) - drawn
-        if extra > 0:
-            d.text((pad, y), f"+{extra} more", font=font(30), fill=110)
 
-    d.line([pad, 1170, W - pad, 1170], fill=0, width=5)
+    d.line([pad, 1180, W - pad, 1180], fill=0, width=5)
 
     # To-do placeholder
-    d.text((pad, 1190), "TO DO", font=font(44, True), fill=0)
-    d.text((pad, 1260), "Reminders coming soon", font=font(38), fill=110)
+    d.text((pad, 1198), "TO DO", font=font(44, True), fill=0)
+    d.text((pad, 1268), "Reminders coming soon", font=font(38), fill=110)
 
     # Footer
     d.text((W - pad, H - 40), f"Updated {now.strftime('%-I:%M %p')}",

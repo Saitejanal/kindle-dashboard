@@ -21,9 +21,11 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get install -y fonts-dejavu-core
-          pip install pillow
+          pip install pillow icalendar recurring-ical-events
 
       - name: Generate dashboard
+        env:
+          CALENDAR_URL: ${{ secrets.CALENDAR_URL }}
         run: python generate.py
 
       - name: Save the picture

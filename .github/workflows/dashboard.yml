@@ -9,6 +9,10 @@ on:
         description: "Type yes to mark the litter box cleaned today"
         required: false
         default: "no"
+      bird_filled:
+        description: "Type yes to mark the bird bath filled today"
+        required: false
+        default: "no"
 
 permissions:
   contents: write
@@ -32,11 +36,27 @@ jobs:
           sudo apt-get install -y fonts-dejavu-core
           pip install pillow icalendar recurring-ical-events
 
-      - name: Mark litter box cleaned
-        if: ${{ github.event.inputs.litter_cleaned == 'yes' }}
+      - name: Update chore dates
+        env:
+          LITTER: ${{ github.event.inputs.litter_cleaned }}
+          BIRD: ${{ github.event.inputs.bird_filled }}
         run: |
-          TODAY=$(TZ=America/New_York date +%F)
-          echo "{\"litter_last_cleaned\": \"$TODAY\"}" > state.json
+          python - <<'PY'
+          import json, os
+          from datetime import datetime
+          from zoneinfo import ZoneInfo
+          today = datetime.now(ZoneInfo("America/New_York")).date().isoformat()
+          try:
+              state = json.load(open("state.json"))
+          except Exception:
+              state = {}
+          if os.environ.get("LITTER") == "yes":
+              state["litter_last_cleaned"] = today
+          if os.environ.get("BIRD") == "yes":
+              state["bird_bath_last_filled"] = today
+          if state:
+              json.dump(state, open("state.json", "w"))
+          PY
 
       - name: Generate dashboard
         env:

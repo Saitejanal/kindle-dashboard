@@ -21,10 +21,15 @@ LAT, LON = 41.3165, -73.0932        # Shelton, CT
 TZ = "America/New_York"
 OUT = "dash.png"
 W, H = 1072, 1448
-MAX_EVENTS = 5
+MAX_EVENTS = 8          # most events ever shown; fewer if space is tight
 LOOKAHEAD_DAYS = 90
 LITTER_EVERY_DAYS = 2   # how often the litter box should be cleaned
+BIRD_EVERY_DAYS = 2     # how often the bird bath should be filled
+PET_NAME = "Prem"
 STATE_FILE = "state.json"
+TRASH_WEEKDAY = 1       # 0 = Monday ... 1 = Tuesday
+# A Tuesday on which RECYCLING also goes out; every second Tuesday after it too.
+RECYCLE_ANCHOR = date(2026, 11, 3)
 # ---------------------------------
 
 UA = {"User-Agent": "kindle-dashboard (github.com/Saitejanal/kindle-dashboard)"}
@@ -238,27 +243,62 @@ def fit(text, fnt, max_w, draw):
     return text.rstrip() + "\u2026"
 
 
-# ---------------- litter state ----------------
-def load_litter(now):
-    """Reads state.json -> dict(days, mood, headline, sub, filled) or None."""
-    if not os.path.exists(STATE_FILE):
+# ---------------- tracked chores (tap-to-confirm) ----------------
+def read_state():
+    try:
+        with open(STATE_FILE) as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def tracker_status(last_iso, every, now, noun="ago"):
+    """Days since last_iso -> dict(mood happy|ok|bad, headline, sub, filled 0-4) or None."""
+    if not last_iso:
         return None
-    with open(STATE_FILE) as f:
-        last = date.fromisoformat(json.load(f)["litter_last_cleaned"])
-    days = max((now.date() - last).days, 0)
-    every = LITTER_EVERY_DAYS
+    days = max((now.date() - date.fromisoformat(last_iso)).days, 0)
     if days == 0:
-        mood, head = "happy", "Cleaned today"
-        sub = "Next in %d days" % every if every > 1 else "Due tomorrow"
+        mood, head = "happy", "Done today"
+        sub = f"Next in {every} days" if every > 1 else "Due tomorrow"
     elif days < every:
         mood, head = "ok", "1 day ago" if days == 1 else f"{days} days ago"
         left = every - days
         sub = "Due tomorrow" if left == 1 else f"Due in {left} days"
     else:
-        mood, head = "grumpy", f"{days} days ago"
+        mood, head = "bad", f"{days} days ago"
         sub = "Due today" if days == every else "Overdue!"
-    filled = min(4, round(days / every * 4))
-    return {"days": days, "mood": mood, "headline": head, "sub": sub, "filled": filled}
+    return {"days": days, "mood": mood, "headline": head, "sub": sub,
+            "filled": min(4, round(days / every * 4))}
+
+
+def load_litter(now):
+    st = tracker_status(read_state().get("litter_last_cleaned"), LITTER_EVERY_DAYS, now)
+    if st and st["days"] == 0:
+        st["headline"] = "Cleaned today"
+    return st
+
+
+def load_bird(now):
+    st = tracker_status(read_state().get("bird_bath_last_filled"), BIRD_EVERY_DAYS, now)
+    if st and st["days"] == 0:
+        st["headline"] = "Filled today"
+    return st
+
+
+def trash_info(now):
+    """Next trash night -> dict(when, recycle, date). Trash goes out Tuesday night."""
+    today = now.date()
+    ahead = (TRASH_WEEKDAY - today.weekday()) % 7
+    day = today + timedelta(days=ahead)
+    weeks = (day - RECYCLE_ANCHOR).days // 7
+    recycle = weeks % 2 == 0
+    if ahead == 0:
+        when = "Tonight"
+    elif ahead == 1:
+        when = "Tomorrow"
+    else:
+        when = f"In {ahead} days"
+    return {"when": when, "recycle": recycle, "date": day}
 
 
 # ---------------- the cat ----------------
@@ -321,6 +361,84 @@ def draw_cat(d, cx, cy, size, mood):
             d.line((x, y-10*s, x, y+10*s), fill=BLK, width=int(5*s))
 
 
+# ---------------- bird bath and bins ----------------
+def draw_bird_bath(d, cx, cy, size, mood):
+    """Songbird on a bird bath. mood: happy (water full), ok (half), bad (dry, thirsty)."""
+    s = size / 200.0
+    k = s * 1.5                     # the bird is drawn larger than the bath
+    BLK = 0
+    # pedestal and bowl
+    d.rectangle((cx-14*s, cy+66*s, cx+14*s, cy+118*s), fill=BLK)
+    d.rectangle((cx-48*s, cy+114*s, cx+48*s, cy+126*s), fill=BLK)
+    d.pieslice((cx-86*s, cy-6*s, cx+86*s, cy+96*s), 0, 180, fill=BLK)
+    d.ellipse((cx-86*s, cy+16*s, cx+86*s, cy+44*s), fill=255, outline=BLK, width=max(2, int(4*s)))
+    # water
+    if mood == "happy":
+        d.ellipse((cx-76*s, cy+20*s, cx+76*s, cy+42*s), fill=190)
+        for dx, dy in ((-30, 30), (30, 28), (58, 32)):
+            d.ellipse((cx+dx*s-3*s, cy+dy*s-2*s, cx+dx*s+3*s, cy+dy*s+2*s), outline=BLK, width=max(1, int(2*s)))
+    elif mood == "ok":
+        d.ellipse((cx-56*s, cy+27*s, cx+56*s, cy+41*s), fill=190)
+    else:
+        for dx in (-50, -18, 22, 52):
+            d.line((cx+dx*s, cy+32*s, cx+(dx+8)*s, cy+36*s), fill=110, width=max(1, int(2*s)))
+    # bird: sits on the left rim, feet at the rim line
+    bx, by = cx-34*s, cy+28*s - 26*k          # body centre (feet on the rim)
+    d.polygon([(bx-22*k, by+4*k), (bx-52*k, by+22*k), (bx-46*k, by+2*k), (bx-54*k, by-12*k)], fill=50)   # tail
+    d.ellipse((bx-26*k, by-24*k, bx+26*k, by+28*k), fill=110)                                      # body
+    d.ellipse((bx-6*k, by-6*k, bx+24*k, by+28*k), fill=250)                                        # belly
+    d.ellipse((bx-26*k, by-8*k, bx+2*k, by+20*k), fill=40)                                         # wing
+    d.ellipse((bx+6*k, by-42*k, bx+38*k, by-10*k), fill=110)                                       # head
+    d.line((bx-4*k, by+22*k, bx-4*k, by+32*k), fill=BLK, width=max(2, int(4*s)))
+    d.line((bx+8*k, by+22*k, bx+8*k, by+32*k), fill=BLK, width=max(2, int(4*s)))
+    # eye
+    ex, ey = bx+22*k, by-28*k
+    if mood == "happy":
+        d.arc((ex-6*k, ey-3*k, ex+6*k, ey+7*k), 200, 340, fill=255, width=max(2, int(4*s)))
+    else:
+        d.ellipse((ex-6*k, ey-6*k, ex+6*k, ey+6*k), fill=255)
+        off = 2*k if mood == "bad" else 0
+        d.ellipse((ex-3*k, ey-3*k+off, ex+3*k, ey+3*k+off), fill=BLK)
+        if mood == "bad":
+            d.line((ex-12*k, ey-12*k, ex+6*k, ey-6*k), fill=255, width=max(2, int(4*s)))
+    # beak
+    lift = 3*k if mood == "happy" else 0
+    d.polygon([(bx+36*k, by-30*k), (bx+54*k, by-23*k-lift), (bx+36*k, by-17*k)], fill=235, outline=BLK)
+    if mood == "happy":
+        f = font(max(18, int(30*s)), True)
+        d.text((cx+22*s, cy-92*s), "\u266a", font=f, fill=BLK)
+        d.text((cx+52*s, cy-68*s), "\u266a", font=f, fill=BLK)
+    elif mood == "bad":
+        f = font(max(20, int(36*s)), True)
+        d.text((cx+30*s, cy-96*s), "!", font=f, fill=BLK)
+        dx0, dy0 = cx+62*s, cy-30*s
+        d.polygon([(dx0, dy0-26*s), (dx0-11*s, dy0-4*s), (dx0+11*s, dy0-4*s)], outline=BLK, width=max(2, int(3*s)))
+        d.ellipse((dx0-11*s, dy0-8*s, dx0+11*s, dy0+14*s), outline=BLK, width=max(2, int(3*s)))
+
+
+def draw_bin(d, x, y, w, h, kind):
+    """Wheelie-bin icon at (x, y) top-left. kind: trash | recycle"""
+    lid_h = h * 0.16
+    body = [(x+w*0.08, y+lid_h), (x+w*0.92, y+lid_h), (x+w*0.82, y+h), (x+w*0.18, y+h)]
+    if kind == "trash":
+        d.polygon(body, fill=0)
+        d.rectangle((x, y, x+w, y+lid_h), fill=0)
+        d.rectangle((x+w*0.32, y-h*0.07, x+w*0.68, y), fill=0)
+        for fx in (0.34, 0.5, 0.66):
+            d.line((x+w*fx, y+h*0.30, x+w*fx, y+h*0.84), fill=255, width=max(2, int(w*0.05)))
+    else:
+        d.polygon(body, fill=60)
+        d.rectangle((x, y, x+w, y+lid_h), fill=60)
+        cx, cy, r = x+w*0.5, y+h*0.60, w*0.22
+        for k in range(3):
+            a0 = math.radians(90 + k*120)
+            a1 = math.radians(90 + (k+1)*120 - 25)
+            pts = [(cx + r*math.cos(a0 + t*(a1-a0)/10), cy - r*math.sin(a0 + t*(a1-a0)/10)) for t in range(11)]
+            d.line(pts, fill=255, width=max(3, int(w*0.06)))
+            hx, hy = pts[-1]
+            d.ellipse((hx-w*0.04, hy-w*0.04, hx+w*0.04, hy+w*0.04), fill=255)
+
+
 # ---------------- drawing ----------------
 def fmt_clock(iso):
     return datetime.fromisoformat(iso).strftime("%-I:%M %p")
@@ -375,35 +493,51 @@ def render(ctx):
         d.text((pad, 250), "Weather unavailable", font=font(50, True), fill=0)
     d.line([pad, 375, W-pad, 375], fill=0, width=3)
 
-    # --- alert bar (only when there is an active alert) ---
-    dy = -70
-    if alerts:
-        dy = 0
-        d.rectangle((pad, 392, W-pad, 446), fill=0)
-        text = "ALERT  " + alerts[0] + (f"  (+{len(alerts)-1})" if len(alerts) > 1 else "")
-        d.text((pad+18, 419), fit(text, font(29, True), W-2*pad-36, d), font=font(29, True), fill=255, anchor="lm")
+    # ---- flowing layout: sections stack from the top and the event list
+    # ---- grows or shrinks to use the space that is left ----
+    ROW_H = 47
+    FOOT = H - 70                 # nothing may be drawn below this line
+    BOTTOM_H = 305 + 275          # HOME/pet panels + CHORES panels
+    y = 392
 
-    # --- upcoming events ---
-    d.text((pad, 466+dy), "UPCOMING", font=font(34, True), fill=0)
-    y = 516 + dy
+    # alert bar (only when there is an active alert)
+    if alerts:
+        d.rectangle((pad, y, W-pad, y+54), fill=0)
+        text = "ALERT  " + alerts[0] + (f"  (+{len(alerts)-1})" if len(alerts) > 1 else "")
+        d.text((pad+18, y+27), fit(text, font(29, True), W-2*pad-36, d), font=font(29, True), fill=255, anchor="lm")
+        y += 74
+
+    countdown_h = 66 if countdown else 0
+    rows_avail = FOOT - (y + 50) - countdown_h - 20 - BOTTOM_H
+    max_rows = max(3, min(MAX_EVENTS, rows_avail // ROW_H))
+    shown = (events or [])[:max_rows]
+    n_rows = max(len(shown), 1)
+
+    # spread leftover space a little so a short list does not look cramped
+    bottom_if_packed = y + 50 + n_rows*ROW_H + countdown_h + 20 + BOTTOM_H
+    gap = min(max(FOOT - bottom_if_packed, 0) // 2, 34)
+    y += gap
+
+    d.text((pad, y+2), "UPCOMING", font=font(34, True), fill=0)
+    y += 50
     if events is None:
         d.text((pad, y), "Calendar not set up", font=font(31), fill=110)
-        y += 47
+        y += ROW_H
     elif not events:
         d.text((pad, y), "No upcoming events", font=font(31), fill=110)
-        y += 47
+        y += ROW_H
     else:
-        for day, tm, title in events:
+        for day, tm, title in shown:
             d.text((pad, y), day, font=font(29, True), fill=0)
             d.text((pad+185, y), tm, font=font(29), fill=40)
             d.text((pad+350, y), fit(title, font(31), W-pad-(pad+350), d), font=font(31), fill=0)
-            y += 47
+            y += ROW_H
     if countdown:
         d.rounded_rectangle((pad, y+8, W-pad, y+58), radius=10, outline=0, width=3)
         d.text((pad+18, y+33), fit("Countdown   " + countdown, font(28, True), W-2*pad-36, d),
                font=font(28, True), fill=0, anchor="lm")
         y += 66
-    y_line = max(y + 20, 835 + dy)
+    y_line = y + 20 + gap
     d.line([pad, y_line, W-pad, y_line], fill=0, width=5)
 
     # --- home (Nest) placeholder ---
@@ -416,12 +550,12 @@ def render(ctx):
 
     # --- cat / litter ---
     lit = ctx.get("litter")
-    d.text((560, top), "CAT", font=font(34, True), fill=0)
-    draw_cat(d, 655, top+136, 170, lit["mood"] if lit else "ok")
+    d.text((560, top), PET_NAME.upper(), font=font(34, True), fill=0)
+    draw_cat(d, 655, top+136, 170, ("grumpy" if lit["mood"] == "bad" else lit["mood"]) if lit else "ok")
     d.text((775, top+63), "Litter box", font=font(27), fill=40)
     if lit:
         d.text((775, top+100), lit["headline"], font=font(30, True), fill=0)
-        d.text((775, top+150), lit["sub"], font=font(26, True if lit["mood"] == "grumpy" else False), fill=0 if lit["mood"] == "grumpy" else 40)
+        d.text((775, top+150), lit["sub"], font=font(26, lit["mood"] == "bad"), fill=0 if lit["mood"] == "bad" else 40)
     else:
         d.text((775, top+100), "not tracked", font=font(30, True), fill=0)
         d.text((775, top+150), "yet", font=font(26), fill=40)
@@ -429,6 +563,46 @@ def render(ctx):
     bx, by, bw, bh, gap = 560, top+256, 98, 26, 12
     for i in range(4):
         x = bx + i*(bw+gap)
+        if i < filled:
+            d.rectangle((x, by, x+bw, by+bh), fill=0)
+        else:
+            d.rectangle((x, by, x+bw, by+bh), outline=0, width=3, fill=255)
+
+    # --- chores band: trash/recycling and the bird bath ---
+    y_c = y_line + 310
+    d.line([pad, y_c, W-pad, y_c], fill=0, width=5)
+    topc = y_c + 17
+    tr = ctx.get("trash")
+    d.text((pad, topc), "TRASH", font=font(34, True), fill=0)
+    if tr:
+        draw_bin(d, pad, topc+60, 96, 130, "trash")
+        if tr["recycle"]:
+            draw_bin(d, pad+112, topc+60, 96, 130, "recycle")
+        tx = pad + (240 if tr["recycle"] else 130)
+        d.text((tx, topc+74), tr["when"], font=font(34, True), fill=0)
+        if tr["recycle"]:
+            d.text((tx, topc+120), "Trash +", font=font(26, True), fill=0)
+            d.text((tx, topc+152), "Recycling", font=font(26, True), fill=0)
+            d.text((tx, topc+190), tr["date"].strftime("Tue %b %-d"), font=font(26), fill=40)
+        else:
+            d.text((tx, topc+120), "Trash only", font=font(26, True), fill=0)
+            d.text((tx, topc+158), tr["date"].strftime("Tue %b %-d"), font=font(26), fill=40)
+    d.line([520, topc+8, 520, topc+248], fill=0, width=3)
+
+    bird = ctx.get("bird")
+    d.text((560, topc), "BIRD BATH", font=font(34, True), fill=0)
+    draw_bird_bath(d, 655, topc+104, 124, bird["mood"] if bird else "ok")
+    d.text((775, topc+74), "Water", font=font(27), fill=40)
+    if bird:
+        d.text((775, topc+108), bird["headline"], font=font(30, True), fill=0)
+        d.text((775, topc+154), bird["sub"], font=font(26, bird["mood"] == "bad"), fill=0 if bird["mood"] == "bad" else 40)
+    else:
+        d.text((775, topc+108), "not tracked", font=font(30, True), fill=0)
+        d.text((775, topc+154), "yet", font=font(26), fill=40)
+    filled = bird["filled"] if bird else 0
+    bx, by, bw, bh, gap_ = 560, topc+226, 98, 26, 12
+    for i in range(4):
+        x = bx + i*(bw+gap_)
         if i < filled:
             d.rectangle((x, by, x+bw, by+bh), fill=0)
         else:
@@ -456,6 +630,8 @@ def main():
         "alerts": safe("Alerts", lambda: fetch_alerts(now), []),
         "events": safe("Calendar", lambda: get_events(now), (None, None)),
         "litter": safe("Litter", lambda: load_litter(now)),
+        "bird": safe("Bird bath", lambda: load_bird(now)),
+        "trash": safe("Trash", lambda: trash_info(now)),
     }
     render(ctx).save(OUT)
     print("Saved", OUT)

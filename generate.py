@@ -27,9 +27,9 @@ LITTER_EVERY_DAYS = 2   # how often the litter box should be cleaned
 BIRD_EVERY_DAYS = 2     # how often the bird bath should be filled
 PET_NAME = "Prem"
 STATE_FILE = "state.json"
-TRASH_WEEKDAY = 1       # 0 = Monday ... 1 = Tuesday
-# A Tuesday on which RECYCLING also goes out; every second Tuesday after it too.
-RECYCLE_ANCHOR = date(2026, 11, 3)
+TRASH_WEEKDAY = 0       # the night bins go OUT (0 = Monday); pickup is Tuesday morning
+# A Monday night on which RECYCLING also goes out; every second Monday after it too.
+RECYCLE_ANCHOR = date(2026, 11, 2)
 # ---------------------------------
 
 UA = {"User-Agent": "kindle-dashboard (github.com/Saitejanal/kindle-dashboard)"}
@@ -286,7 +286,7 @@ def load_bird(now):
 
 
 def trash_info(now):
-    """Next trash night -> dict(when, recycle, date). Trash goes out Tuesday night."""
+    """Next night the bins go out -> dict(when, recycle, date). Pickup is the next morning."""
     today = now.date()
     ahead = (TRASH_WEEKDAY - today.weekday()) % 7
     day = today + timedelta(days=ahead)
@@ -583,10 +583,10 @@ def render(ctx):
         if tr["recycle"]:
             d.text((tx, topc+120), "Trash +", font=font(26, True), fill=0)
             d.text((tx, topc+152), "Recycling", font=font(26, True), fill=0)
-            d.text((tx, topc+190), tr["date"].strftime("Tue %b %-d"), font=font(26), fill=40)
+            d.text((tx, topc+190), tr["date"].strftime("Out %a %b %-d"), font=font(26), fill=40)
         else:
             d.text((tx, topc+120), "Trash only", font=font(26, True), fill=0)
-            d.text((tx, topc+158), tr["date"].strftime("Tue %b %-d"), font=font(26), fill=40)
+            d.text((tx, topc+158), tr["date"].strftime("Out %a %b %-d"), font=font(26), fill=40)
     d.line([520, topc+8, 520, topc+248], fill=0, width=3)
 
     bird = ctx.get("bird")
